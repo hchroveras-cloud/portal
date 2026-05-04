@@ -306,6 +306,10 @@ textarea.finput{resize:vertical;min-height:80px;line-height:1.6}
   .save-btn,.sub-btn,.add-btn{width:100%}
 }
 </style>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
 </head>
 <body>
 
@@ -626,6 +630,22 @@ textarea.finput{resize:vertical;min-height:80px;line-height:1.6}
 <div class="toast ok" id="toast" style="display:none"></div>
 
 <script>
+// Firebase init
+var firebaseConfig = {
+  apiKey: "AIzaSyBqCCx2hFgOAMLp37WpLmrFP2pdcrUQzl8",
+  authDomain: "portal-bacchus.firebaseapp.com",
+  projectId: "portal-bacchus",
+  storageBucket: "portal-bacchus.firebasestorage.app",
+  messagingSenderId: "298004122950",
+  appId: "1:298004122950:web:344a8227cceded4c0f6947"
+};
+firebase.initializeApp(firebaseConfig);
+var fbAuth = firebase.auth();
+var fbDb = firebase.firestore();
+var fbStorage = firebase.storage();
+var ADMIN_EMAILS = ["admin@bacchusb.com"];
+var currentUser = null;
+function getRoleForEmail(e){ return ADMIN_EMAILS.indexOf(e.toLowerCase()) >= 0 ? "admin" : "producer"; }
 // =====================================================
 // ALL EVENT WIRING HAPPENS IN DOMContentLoaded
 // No top-level DOM access - prevents all crashes
@@ -702,11 +722,6 @@ var producers = [
    data:{company:{companyName:"Scrocchia80 Srl",vat:"IT 00000000000",website:"scrocchia80.it",regCountry:"Italy",companyType:"Producer / Manufacturer",addresses:[],contacts:[],banks:[]},products:[{name:"Scrocchia80 La Classica",sku:"SCR-LC-001",category:"Condiment / Sauce",country:"Italy",size:"500g",units:"6",organic:false,shelfLife:"24 months",storageTemp:"Ambient"}],technical:[],regulatory:{},pricing:{currency:"EUR",incoterm:"EXW",lines:[]},sustainability:{},agreements:{},documents:[{name:"Scrocchia80 TECHNICAL INFORMATION.xlsx",category:"Tech Sheet",size:"21 KB",date:"23 Apr 2026",ext:"xlsx",url:""}]}}
 ];
 
-var USERS = {
-  "herman@bacchusb.com": {pass:"bacchus2024",role:"producer",name:"Herman — Bacchus"},
-  "producer@bacchusb.com": {pass:"bacchus2024",role:"producer",name:"Producer"},
-  "admin@bacchusb.com": {pass:"admin2024",role:"admin",name:"Admin"}
-};
 
 var completedSecs = {};
 var prodCnt = 0;
@@ -773,31 +788,79 @@ function doLogin() {
   var emailEl = document.getElementById("l-email");
   var passEl = document.getElementById("l-pass");
   var errEl = document.getElementById("login-err");
-  if (!emailEl || !passEl) { showToast("Page error — please refresh", "err"); return; }
+  if (!emailEl || !passEl) return;
   var em = emailEl.value.trim().toLowerCase();
   var pw = passEl.value;
-  var u = USERS[em];
-  if (!u || u.pass !== pw) {
-    errEl.classList.add("show");
-    return;
-  }
   errEl.classList.remove("show");
-  if (u.role === "admin") {
+  fbAuth.signInWithEmailAndPassword(em, pw)
+    .then(function(cred) { currentUser = cred.user; handleAuthSuccess(cred.user); })
+    .catch(function() { errEl.classList.add("show"); });
+}
+
+function handleAuthSuccess(user) {
+  var role = getRoleForEmail(user.email);
+  if (role === "admin") {
     showScreen("admin");
-    renderTable();
+    loadProducersFromFirestore();
   } else {
-    document.getElementById("p-nm").textContent = u.name;
-    // avatar is now logo image, no text needed
+    var name = user.displayName || user.email.split("@")[0];
+    document.getElementById("p-nm").textContent = name;
     showScreen("portal");
-    if (prodCnt === 0) addProduct();
-    if (techCnt === 0) addTech();
+    loadProducerData(user.uid);
   }
 }
 
 function doLogout() {
-  showScreen("login");
-  editMode = false;
+  fbAuth.signOut().then(function() {
+    currentUser = null;
+    completedSecs = {};
+    editMode = false;
+    showScreen("login");
+  });
 }
+
+function loadProducerData(uid) {
+  if (prodCnt === 0) addProduct();
+  if (techCnt === 0) addTech();
+  fbDb.collection("producers").doc(uid).get().then(function(doc) {
+    if (!doc.exists) return;
+    var d = doc.data();
+    if (!d.completedSecs) return;
+    d.completedSecs.forEach(function(id) {
+      completedSecs[id] = true;
+      var nav = document.getElementById("n-" + id);
+      if (nav && !nav.querySelector(".ni-done")) {
+        var span = document.createElement("span");
+        span.className = "ni-done"; span.textContent = "✓";
+        nav.appendChild(span);
+      }
+      var pb = document.getElementById("pb-" + id);
+      if (pb) { pb.className = "pbadge saved"; pb.textContent = "Saved"; }
+    });
+    updateProg();
+  }).catch(function(e){ console.error(e); });
+}
+
+function loadProducersFromFirestore() {
+  fbDb.collection("producers").get().then(function(snap) {
+    if (!snap.empty) {
+      var list = [];
+      snap.forEach(function(doc) {
+        var d = doc.data();
+        list.push({ id:doc.id, name:d.name||d.email||doc.id, email:d.email||"",
+          country:d.country||"—", type:d.type||"abv", status:d.status||"incomplete",
+          done:d.completedSecs||[], updated:(d.updatedAt||"").slice(0,10), note:"", data:{} });
+      });
+      if (list.length) producers = list;
+    }
+    renderTable();
+  }).catch(function(){ renderTable(); });
+}
+
+// Restore session on page load
+fbAuth.onAuthStateChanged(function(user) {
+  if (user) { currentUser = user; handleAuthSuccess(user); }
+});
 
 // Wire login buttons
 document.getElementById("login-btn").addEventListener("click", doLogin);
@@ -825,6 +888,23 @@ function showSec(id) {
   if (pm) pm.scrollTop = 0;
 }
 
+function collectSection(secId) {
+  var sec = document.getElementById("sec-" + secId);
+  if (!sec) return {};
+  var data = { _savedAt: new Date().toISOString() };
+  var seen = {};
+  sec.querySelectorAll("input:not([type=file]):not([type=checkbox]), select, textarea").forEach(function(el) {
+    var k = (el.id || el.getAttribute("placeholder") || "f").replace(/[^a-zA-Z0-9]/g,"_");
+    seen[k] = (seen[k] || 0) + 1;
+    if (seen[k] > 1) k = k + "_" + seen[k];
+    data[k] = el.value;
+  });
+  sec.querySelectorAll("input[type=checkbox]").forEach(function(el) {
+    data[el.id || "chk"] = el.checked;
+  });
+  return data;
+}
+
 function saveSec(id) {
   completedSecs[id] = true;
   var nav = document.getElementById("n-" + id);
@@ -839,13 +919,24 @@ function saveSec(id) {
   var pb = document.getElementById("pb-" + id);
   if (pb) { pb.className = "pbadge saved"; pb.textContent = "Saved"; }
   updateProg();
+
+  if (currentUser) {
+    var sectionData = collectSection(id);
+    fbDb.collection("producers").doc(currentUser.uid).collection("sections").doc(id).set(sectionData)
+      .catch(function(e){ console.error("save section err", e); });
+    fbDb.collection("producers").doc(currentUser.uid).set({
+      email: currentUser.email,
+      name: currentUser.displayName || currentUser.email,
+      completedSecs: Object.keys(completedSecs),
+      updatedAt: new Date().toISOString(),
+      status: "incomplete"
+    }, { merge: true });
+  }
+
   showToast("Section saved", "ok");
   var ids = SECS.map(function(s) { return s.id; });
   var idx = ids.indexOf(id);
-  if (idx >= 0 && idx < ids.length - 1) {
-    var next = ids[idx + 1];
-    showSec(next);
-  }
+  if (idx >= 0 && idx < ids.length - 1) showSec(ids[idx + 1]);
 }
 
 function updateProg() {
@@ -1080,6 +1171,25 @@ for (var oi = 0; oi < openBtns.length; oi++) {
 }
 
 // FILE UPLOAD
+function addFileToList(list, name, ext, cat, size, date, url, localKey, storRef) {
+  var item = document.createElement("div");
+  item.className = "fi";
+  item.innerHTML = '<div class="fi-ext ' + ext + '">' + ext + '</div>' +
+    '<div class="fi-inf"><div class="fi-name">' + name + '</div><div class="fi-meta">' + cat + ' · ' + size + ' · ' + date + '</div></div>' +
+    '<button class="fi-open">Open</button><button class="fi-rm">Remove</button>';
+  item.querySelector(".fi-open").addEventListener("click", function() {
+    if (url) { window.open(url, "_blank"); }
+    else if (localKey && fileStore[localKey]) { var a = document.createElement("a"); a.href = fileStore[localKey]; a.download = name; a.click(); }
+    else showToast("File not available", "info");
+  });
+  item.querySelector(".fi-rm").addEventListener("click", function() {
+    if (storRef) storRef.delete().catch(function(){});
+    if (localKey) delete fileStore[localKey];
+    list.removeChild(item);
+  });
+  list.appendChild(item);
+}
+
 function handleUpload(inputId, listId) {
   var input = document.getElementById(inputId);
   var list = document.getElementById(listId);
@@ -1092,30 +1202,33 @@ function handleUpload(inputId, listId) {
       var ext = file.name.split(".").pop().toLowerCase();
       var size = file.size < 1048576 ? Math.round(file.size/1024) + " KB" : (Math.round(file.size/1048576*10)/10) + " MB";
       var date = new Date().toLocaleDateString("en-GB", {day:"2-digit",month:"short",year:"numeric"});
-      var key = "f_" + Date.now() + "_" + Math.random().toString(36).substr(2,6);
-      var reader = new FileReader();
-      reader.onload = function(e) {
-        fileStore[key] = e.target.result;
-        var item = document.createElement("div");
-        item.className = "fi";
-        item.innerHTML = '<div class="fi-ext ' + ext + '">' + ext + '</div>' +
-          '<div class="fi-inf"><div class="fi-name">' + file.name + '</div><div class="fi-meta">' + cat + ' · ' + size + ' · ' + date + '</div></div>' +
-          '<button class="fi-open">Open</button>' +
-          '<button class="fi-rm">Remove</button>';
-        item.querySelector(".fi-open").addEventListener("click", function() {
-          var data = fileStore[key];
-          if (data) { var a = document.createElement("a"); a.href = data; a.download = file.name; a.click(); }
-          else showToast("File not available", "info");
-        });
-        item.querySelector(".fi-rm").addEventListener("click", function() {
-          delete fileStore[key];
-          list.removeChild(item);
-        });
-        list.appendChild(item);
-        showToast("Uploaded: " + file.name, "ok");
-      };
-      reader.onerror = function() { showToast("Error reading: " + file.name, "err"); };
-      reader.readAsDataURL(file);
+      if (currentUser) {
+        var path = "producers/" + currentUser.uid + "/" + inputId + "/" + Date.now() + "_" + file.name;
+        var storRef = fbStorage.ref(path);
+        showToast("Uploading " + file.name + "…", "info");
+        storRef.put(file).then(function() {
+          return storRef.getDownloadURL();
+        }).then(function(url) {
+          addFileToList(list, file.name, ext, cat, size, date, url, null, storRef);
+          if (inputId === "doc-upload") {
+            fbDb.collection("producers").doc(currentUser.uid).collection("documents").add({
+              name: file.name, category: cat, size: size, date: date,
+              url: url, path: path, ext: ext, uploadedAt: new Date().toISOString()
+            });
+          }
+          showToast("Uploaded: " + file.name, "ok");
+        }).catch(function(err) { showToast("Upload failed: " + err.message, "err"); });
+      } else {
+        var key = "f_" + Date.now();
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          fileStore[key] = e.target.result;
+          addFileToList(list, file.name, ext, cat, size, date, null, key, null);
+          showToast("Uploaded: " + file.name, "ok");
+        };
+        reader.onerror = function() { showToast("Error reading: " + file.name, "err"); };
+        reader.readAsDataURL(file);
+      }
     });
     input.value = "";
   });
