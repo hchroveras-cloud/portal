@@ -645,13 +645,7 @@ var fbStorage = firebase.storage();
 var ADMIN_EMAILS = ["admin@bacchusb.com"];
 var currentUser = null;
 function getRoleForEmail(e){ return ADMIN_EMAILS.indexOf(e.toLowerCase()) >= 0 ? "admin" : "producer"; }
-// =====================================================
-// ALL EVENT WIRING HAPPENS IN DOMContentLoaded
-// No top-level DOM access - prevents all crashes
-// =====================================================
 document.addEventListener("DOMContentLoaded", function() {
-
-// CONFIG
 var SECS = [
   {id:"company",label:"Company Info",req:true},
   {id:"products",label:"Products",req:true},
@@ -665,6 +659,8 @@ var SECS = [
 ];
 var TL = {abv:"With ABV",noabv:"No ABV",food:"Food",mixed:"Mixed"};
 var ALLERGENS = ["Gluten","Shellfish","Eggs","Fish","Peanuts","Soy","Milk","Tree Nuts","Celery","Mustard","Sesame","Sulphites","Lupin","Molluscs","None"];
+var SEC_IDS = SECS.map(function(s){ return s.id; });
+var SEC_REQ = SECS.filter(function(s){ return s.req; }).map(function(s){ return s.id; });
 var SK = "bacchus_v5";
 var fileStore = {};
 
@@ -729,34 +725,14 @@ var selP = null;
 var delId = null;
 var editMode = false;
 
-// Load/save state
 function saveState() {
   try { localStorage.setItem(SK, JSON.stringify(producers)); } catch(e) {}
 }
-function loadState() {
-  try {
-    var s = localStorage.getItem(SK);
-    if (s) {
-      var p = JSON.parse(s);
-      if (Array.isArray(p) && p.length > 0) producers = p;
-    }
-  } catch(e) {
-    try { localStorage.removeItem(SK); } catch(e2) {}
-  }
-}
-loadState();
+try { var _ls = localStorage.getItem(SK); if (_ls) { var _p = JSON.parse(_ls); if (Array.isArray(_p) && _p.length) producers = _p; } } catch(e) {}
 
-// Set logos
-var logoSrc = ""; // injected below
-function setLogos(src) {
-  var ids = ["main-logo","portal-logo","admin-logo","detail-logo"];
-  for (var i = 0; i < ids.length; i++) {
-    var el = document.getElementById(ids[i]);
-    if (el) el.src = src;
-  }
-}
+function findProducer(id) { return producers.filter(function(x){ return x.id === id; })[0]; }
+function showModal(id) { document.getElementById(id).classList.add("show"); }
 
-// HELPERS
 function showToast(msg, type) {
   type = type || "ok";
   var t = document.getElementById("toast");
@@ -896,16 +872,13 @@ function showSec(id) {
 function collectSection(secId) {
   var sec = document.getElementById("sec-" + secId);
   if (!sec) return {};
-  var data = { _savedAt: new Date().toISOString() };
-  var seen = {};
-  sec.querySelectorAll("input:not([type=file]):not([type=checkbox]), select, textarea").forEach(function(el) {
+  var data = { _savedAt: new Date().toISOString() }, seen = {};
+  sec.querySelectorAll("input:not([type=file]), select, textarea").forEach(function(el) {
+    if (el.type === "checkbox") { data[el.id || "chk"] = el.checked; return; }
     var k = (el.id || el.getAttribute("placeholder") || "f").replace(/[^a-zA-Z0-9]/g,"_");
     seen[k] = (seen[k] || 0) + 1;
-    if (seen[k] > 1) k = k + "_" + seen[k];
+    if (seen[k] > 1) k += "_" + seen[k];
     data[k] = el.value;
-  });
-  sec.querySelectorAll("input[type=checkbox]").forEach(function(el) {
-    data[el.id || "chk"] = el.checked;
   });
   return data;
 }
@@ -939,24 +912,19 @@ function saveSec(id) {
   }
 
   showToast("Section saved", "ok");
-  var ids = SECS.map(function(s) { return s.id; });
-  var idx = ids.indexOf(id);
-  if (idx >= 0 && idx < ids.length - 1) showSec(ids[idx + 1]);
+  var idx = SEC_IDS.indexOf(id);
+  if (idx >= 0 && idx < SEC_IDS.length - 1) showSec(SEC_IDS[idx + 1]);
 }
 
 function updateProg() {
-  var req = SECS.filter(function(s) { return s.req; }).map(function(s) { return s.id; });
   var done = Object.keys(completedSecs).length;
   var pct = Math.round((done / SECS.length) * 100);
   document.getElementById("pct").textContent = pct + "%";
   document.getElementById("prog").style.width = pct + "%";
-  var allReqDone = req.every(function(id) { return completedSecs[id]; });
-  if (allReqDone) document.getElementById("sub-btn").classList.add("show");
+  if (SEC_REQ.every(function(id){ return completedSecs[id]; })) document.getElementById("sub-btn").classList.add("show");
 }
 
-// Wire portal nav buttons
-var secIds = SECS.map(function(s) { return s.id; });
-for (var si = 0; si < secIds.length; si++) {
+for (var si = 0; si < SEC_IDS.length; si++) {
   (function(id) {
     var btn = document.getElementById("n-" + id);
     if (btn) btn.addEventListener("click", function() { showSec(id); });
@@ -987,22 +955,15 @@ function makeRow(title, fields, gridCols) {
   return div;
 }
 
-document.getElementById("add-addr-btn").addEventListener("click", function() {
-  var l = document.getElementById("addr-list");
-  var n = l.children.length + 1;
-  l.appendChild(makeRow("Address " + n, ["Label","Entity / Warehouse","Street Address","ZIP","City","Country","Phone","Email"], 4));
-});
-
-document.getElementById("add-con-btn").addEventListener("click", function() {
-  var l = document.getElementById("con-list");
-  var n = l.children.length + 1;
-  l.appendChild(makeRow("Contact " + n, ["Position / Role","Full Name","Phone","Email"], 4));
-});
-
-document.getElementById("add-bank-btn").addEventListener("click", function() {
-  var l = document.getElementById("bank-list");
-  var n = l.children.length + 1;
-  l.appendChild(makeRow("Bank " + n, ["Bank Name","Bank Address","ZIP","City","IBAN","SWIFT / BIC"], 3));
+[
+  ["add-addr-btn","addr-list","Address",["Label","Entity / Warehouse","Street Address","ZIP","City","Country","Phone","Email"],4],
+  ["add-con-btn","con-list","Contact",["Position / Role","Full Name","Phone","Email"],4],
+  ["add-bank-btn","bank-list","Bank",["Bank Name","Bank Address","ZIP","City","IBAN","SWIFT / BIC"],3]
+].forEach(function(r){
+  document.getElementById(r[0]).addEventListener("click", function(){
+    var l = document.getElementById(r[1]);
+    l.appendChild(makeRow(r[2] + " " + (l.children.length+1), r[3], r[4]));
+  });
 });
 
 function addProduct() {
@@ -1303,22 +1264,18 @@ function renderTable() {
   }
 }
 
-function approveP(id) {
-  producers = producers.map(function(p) { return p.id === id ? Object.assign({}, p, {status:"approved",updated:today()}) : p; });
+function updateProducerStatus(id, status, msg, toastType) {
+  producers = producers.map(function(p){ return p.id === id ? Object.assign({},p,{status:status,updated:today()}) : p; });
   saveState(); renderTable();
   if (selP && selP.id === id) refreshDetailHeader();
-  showToast("Producer approved", "ok");
+  showToast(msg, toastType || "ok");
 }
-function flagP(id) {
-  producers = producers.map(function(p) { return p.id === id ? Object.assign({}, p, {status:"review",updated:today()}) : p; });
-  saveState(); renderTable();
-  if (selP && selP.id === id) refreshDetailHeader();
-  showToast("Flagged for review", "info");
-}
+function approveP(id) { updateProducerStatus(id, "approved", "Producer approved"); }
+function flagP(id)    { updateProducerStatus(id, "review",   "Flagged for review", "info"); }
 
 // INVITE
 document.getElementById("invite-btn").addEventListener("click", function() {
-  document.getElementById("inv-ov").classList.add("show");
+  showModal("inv-ov");
 });
 document.getElementById("send-inv-btn").addEventListener("click", function() {
   var name = document.getElementById("inv-name").value.trim();
@@ -1345,9 +1302,9 @@ document.getElementById("cancel-inv-btn").addEventListener("click", closeModals)
 var delId = null;
 function openDelModal(id) {
   delId = id;
-  var p = producers.filter(function(x) { return x.id === id; })[0];
+  var p = findProducer(id);
   document.getElementById("del-sub").textContent = "Are you sure you want to permanently remove " + (p ? p.name : "this producer") + " and all their data? This cannot be undone.";
-  document.getElementById("del-ov").classList.add("show");
+  showModal("del-ov");
 }
 document.getElementById("confirm-del-btn").addEventListener("click", function() {
   if (!delId) return;
@@ -1380,7 +1337,7 @@ document.getElementById("d-edit-btn").addEventListener("click", toggleEdit);
 document.getElementById("save-note-btn").addEventListener("click", saveNote);
 
 function refreshDetailHeader() {
-  var p = producers.filter(function(x) { return x.id === (selP ? selP.id : null); })[0];
+  var p = selP ? findProducer(selP.id) : null;
   if (!p) return;
   selP = p;
   var SL = {approved:"Approved",pending:"Pending",incomplete:"Incomplete",review:"Needs Info"};
@@ -1392,7 +1349,7 @@ function refreshDetailHeader() {
 }
 
 function openDetail(id) {
-  var p = producers.filter(function(x) { return x.id === id; })[0];
+  var p = findProducer(id);
   if (!p) return;
   selP = p;
   editMode = false;
@@ -1779,7 +1736,7 @@ function rDocuments(docs, pid) {
 }
 
 function handleAdminUpload(files, pid) {
-  var p = producers.filter(function(x) { return x.id === pid; })[0];
+  var p = findProducer(pid);
   if (!p) return;
   if (!p.data.documents) p.data.documents = [];
   Array.from(files).forEach(function(file) {
@@ -1801,7 +1758,7 @@ function handleAdminUpload(files, pid) {
 }
 
 function removeDoc(pid, idx) {
-  var p = producers.filter(function(x) { return x.id === pid; })[0];
+  var p = findProducer(pid);
   if (!p || !p.data.documents) return;
   p.data.documents.splice(idx, 1);
   producers = producers.map(function(x) { return x.id === pid ? p : x; });
